@@ -94,7 +94,7 @@ export interface LLMResponse {
  * - `error`       — an unrecoverable error occurred; `data` is an `Error`
  */
 export interface StreamEvent {
-  readonly type: 'text' | 'tool_use' | 'tool_result' | 'done' | 'error'
+  readonly type: 'text' | 'tool_use' | 'tool_result' | 'loop_detected' | 'done' | 'error'
   readonly data: unknown
 }
 
@@ -216,6 +216,11 @@ export interface AgentConfig {
    */
   readonly timeoutMs?: number
   /**
+   * Loop detection configuration. When set, the agent tracks repeated tool
+   * calls and text outputs to detect stuck loops before `maxTurns` is reached.
+   */
+  readonly loopDetection?: LoopDetectionConfig
+  /**
    * Optional Zod schema for structured output.  When set, the agent's final
    * output is parsed as JSON and validated against this schema.  A single
    * retry with error feedback is attempted on validation failure.
@@ -233,6 +238,41 @@ export interface AgentConfig {
    * Not called when the run throws. For error observation, handle errors at the call site.
    */
   readonly afterRun?: (result: AgentRunResult) => Promise<AgentRunResult> | AgentRunResult
+}
+
+// ---------------------------------------------------------------------------
+// Loop detection
+// ---------------------------------------------------------------------------
+
+/** Configuration for agent loop detection. */
+export interface LoopDetectionConfig {
+  /**
+   * Maximum consecutive times the same tool call (name + args) or text
+   * output can repeat before detection triggers. Default: `3`.
+   */
+  readonly maxRepetitions?: number
+  /**
+   * Number of recent turns to track for repetition analysis. Default: `4`.
+   */
+  readonly loopDetectionWindow?: number
+  /**
+   * Action to take when a loop is detected.
+   * - `'warn'`      — inject a "you appear stuck" message, give the LLM one
+   *                    more chance; terminate if the loop persists (default)
+   * - `'terminate'` — stop the run immediately
+   * - `function`    — custom callback (sync or async); return `'continue'`,
+   *                    `'inject'`, or `'terminate'` to control the outcome
+   */
+  readonly onLoopDetected?: 'warn' | 'terminate' | ((info: LoopDetectionInfo) => 'continue' | 'inject' | 'terminate' | Promise<'continue' | 'inject' | 'terminate'>)
+}
+
+/** Diagnostic payload emitted when a loop is detected. */
+export interface LoopDetectionInfo {
+  readonly kind: 'tool_repetition' | 'text_repetition'
+  /** Number of consecutive identical occurrences observed. */
+  readonly repetitions: number
+  /** Human-readable description of the detected loop. */
+  readonly detail: string
 }
 
 /** Lifecycle state tracked during an agent run. */
@@ -265,6 +305,8 @@ export interface AgentRunResult {
    * failed after retry.
    */
   readonly structured?: unknown
+  /** True when the run was terminated or warned due to loop detection. */
+  readonly loopDetected?: boolean
 }
 
 // ---------------------------------------------------------------------------
